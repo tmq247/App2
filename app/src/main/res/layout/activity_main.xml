@@ -7,7 +7,7 @@
 
     <TextView
         android:id="@+id/txtStatus"
-        android:text="Chưa kết nối"
+        android:text="Chưa lưu thiết bị"
         android:textSize="18sp"
         android:layout_width="match_parent"
         android:layout_height="wrap_content" />
@@ -20,7 +20,7 @@
 
     <Button
         android:id="@+id/btnScan"
-        android:text="Quét & chọn thiết bị"
+        android:text="Quét &amp; chọn thiết bị"
         android:layout_width="match_parent"
         android:layout_height="wrap_content" />
 
