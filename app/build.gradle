@@ -1,0 +1,39 @@
+plugins {
+  id 'com.android.application'
+  id 'org.jetbrains.kotlin.android'
+}
+
+android {
+  namespace "dev.yourapp.blem3"           // ĐỔI nếu muốn
+  compileSdk 34
+
+  defaultConfig {
+    applicationId "dev.yourapp.blem3"     // TÊN GÓI TÙY CHỈNH
+    minSdk 23
+    targetSdk 34
+    versionCode 1
+    versionName "1.0.0"
+  }
+
+  buildTypes {
+    release {
+      minifyEnabled false
+      proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+    }
+  }
+}
+
+dependencies {
+  implementation 'androidx.core:core-ktx:1.13.1'
+  implementation 'androidx.appcompat:appcompat:1.7.0'
+  implementation 'com.google.android.material:material:1.12.0'
+  implementation 'androidx.activity:activity-ktx:1.9.3'
+  implementation 'androidx.lifecycle:lifecycle-runtime-ktx:2.8.6'
+
+  // BLE (Nordic)
+  implementation 'no.nordicsemi.android:ble-ktx:2.7.1'
+  implementation 'no.nordicsemi.android:ble-common:2.7.1'
+
+  // Media control
+  implementation 'androidx.media:media:1.7.0'
+}
