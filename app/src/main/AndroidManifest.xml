@@ -15,10 +15,10 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
 
     <application
-        android:name=".App"
-        android:label="BLE-M3 Interceptor"
-        android:exported="true"
-        android:theme="@style/Theme.AppCompat.DayNight.NoActionBar">
+    android:name=".App"
+    android:label="BLE-M3 Interceptor"
+    android:theme="@android:style/Theme.DeviceDefault.NoActionBar"
+    android:exported="true">
 
         <activity android:name=".KeyMapActivity" android:exported="false" />
         <activity android:name=".MainActivity" android:exported="true">
