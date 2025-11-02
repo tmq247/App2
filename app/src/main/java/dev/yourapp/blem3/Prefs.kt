@@ -1,40 +1,24 @@
 package dev.yourapp.blem3
 
 import android.content.Context
-import org.json.JSONObject
+import android.content.SharedPreferences
 
 object Prefs {
-    private const val NAME = "blem3_prefs"
-    private const val KEY_DEVICE_ADDR = "device_addr"
-    private const val KEY_DEVICE_NAME = "device_name"
-    private const val KEY_AUTOSTART   = "autostart"
-    private const val KEY_MAP         = "keymap" // JSON: usage -> action label
+    private const val PREF = "blem3_prefs"
+    private const val KEY_ADDR = "saved_addr"
+    private const val KEY_NAME = "saved_name"
+    private const val KEY_AUTOSTART = "auto_start"
 
-    private fun sp(ctx: Context) = ctx.getSharedPreferences(NAME, Context.MODE_PRIVATE)
+    private fun sp(ctx: Context): SharedPreferences =
+        ctx.getSharedPreferences(PREF, Context.MODE_PRIVATE)
 
-    var Context.savedAddr: String?
-        get() = sp(this).getString(KEY_DEVICE_ADDR, null)
-        set(v) { sp(this).edit().putString(KEY_DEVICE_ADDR, v).apply() }
-
-    var Context.savedName: String?
-        get() = sp(this).getString(KEY_DEVICE_NAME, null)
-        set(v) { sp(this).edit().putString(KEY_DEVICE_NAME, v).apply() }
-
-    var Context.autoStart: Boolean
-        get() = sp(this).getBoolean(KEY_AUTOSTART, true)
-        set(v) { sp(this).edit().putBoolean(KEY_AUTOSTART, v).apply() }
-
-    fun saveMap(ctx: Context, map: Map<Int, String>) {
-        val jo = JSONObject()
-        map.forEach { (k,v) -> jo.put(k.toString(), v) }
-        sp(ctx).edit().putString(KEY_MAP, jo.toString()).apply()
+    fun saveDevice(ctx: Context, addr: String, name: String?) {
+        sp(ctx).edit().putString(KEY_ADDR, addr).putString(KEY_NAME, name ?: "").apply()
     }
+    fun savedAddr(ctx: Context): String? = sp(ctx).getString(KEY_ADDR, null)
+    fun savedName(ctx: Context): String? = sp(ctx).getString(KEY_NAME, null)
 
-    fun loadMap(ctx: Context): MutableMap<Int,String> {
-        val s = sp(ctx).getString(KEY_MAP, "{}") ?: "{}"
-        val jo = JSONObject(s)
-        val out = mutableMapOf<Int,String>()
-        jo.keys().forEach { k -> out[k.toInt()] = jo.getString(k) }
-        return out
-    }
+    fun setAutoStart(ctx: Context, on: Boolean) =
+        sp(ctx).edit().putBoolean(KEY_AUTOSTART, on).apply()
+    fun autoStart(ctx: Context): Boolean = sp(ctx).getBoolean(KEY_AUTOSTART, true)
 }
