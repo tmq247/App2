@@ -8,19 +8,9 @@ import android.os.Bundle
 import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
 
-enum class Action(val label: String) {
-    PLAY_PAUSE("Play/Pause"),
-    NEXT("Next"),
-    PREV("Previous"),
-    VOL_UP("Volume Up"),
-    VOL_DOWN("Volume Down"),
-    NONE("No action");
-    companion object { fun fromLabel(l:String)=values().find{it.label==l}?:NONE }
-}
-
 class KeyMapActivity : AppCompatActivity() {
     private lateinit var list: LinearLayout
-    private val keyMap by lazy { Prefs.loadMap(this) }
+    private val keyMap by lazy { Prefs.loadMap(this) } // usage -> String (enum.name)
 
     private val keyReceiver = object: BroadcastReceiver() {
         override fun onReceive(c: Context?, i: Intent?) {
@@ -66,36 +56,39 @@ class KeyMapActivity : AppCompatActivity() {
     }
 
     private fun addOrUpdateRow(usage: Int) {
-        // Nếu đã có dòng cho usage này thì bỏ qua (đơn giản)
+        // nếu đã có thì thôi (đơn giản)
         for (i in 0 until list.childCount) {
             val row = list.getChildAt(i) as? LinearLayout ?: continue
             val tv = row.getChildAt(0) as? TextView ?: continue
-            if (tv.text.toString().equals("0x" + usage.toString(16).uppercase())) {
-                return
-            }
+            if (tv.text.toString().equals("0x" + usage.toString(16).uppercase())) return
         }
 
         val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
+
             val tv = TextView(this@KeyMapActivity).apply {
                 text = "0x" + usage.toString(16).uppercase()
                 width = 220
             }
+
+            val display = Action.values().map { it.name } // dùng enum từ Actions.kt
             val spinner = Spinner(this@KeyMapActivity).apply {
                 adapter = ArrayAdapter(
                     this@KeyMapActivity,
                     android.R.layout.simple_spinner_dropdown_item,
-                    Action.values().map { it.label }
+                    display
                 )
-                val cur = keyMap[usage]?.let { Action.fromLabel(it) } ?: Action.NONE
-                setSelection(Action.values().indexOf(cur))
+                val curName = keyMap[usage] ?: Action.NONE.name
+                val idx = display.indexOf(curName).let { if (it >= 0) it else display.indexOf(Action.NONE.name) }
+                setSelection(idx)
                 onItemSelectedListener = object: AdapterView.OnItemSelectedListener {
                     override fun onItemSelected(parent: AdapterView<*>, view: android.view.View?, pos: Int, id: Long) {
-                        keyMap[usage] = Action.values()[pos].label
+                        keyMap[usage] = display[pos] // lưu enum.name
                     }
                     override fun onNothingSelected(parent: AdapterView<*>) {}
                 }
             }
+
             addView(tv); addView(spinner)
         }
         list.addView(row)
