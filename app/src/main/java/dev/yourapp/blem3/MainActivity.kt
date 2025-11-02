@@ -1,69 +1,112 @@
 package dev.yourapp.blem3
 
 import android.Manifest
-import android.bluetooth.BluetoothAdapter
-import android.bluetooth.BluetoothDevice
 import android.content.*
 import android.content.pm.PackageManager
+import android.graphics.Color
 import android.os.Build
 import android.os.Bundle
-import android.widget.Button
-import android.widget.Toast
+import android.view.View
+import android.widget.*
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.view.setPadding
 import dev.yourapp.blem3.Prefs.savedAddr
 import dev.yourapp.blem3.Prefs.savedName
 
 class MainActivity : AppCompatActivity() {
 
+    private lateinit var tvInfo: TextView
+    private lateinit var btnStart: Button
+    private lateinit var btnStop: Button
+    private lateinit var btnPick: Button
+    private lateinit var btnMap: Button
+
+    // xin quyền -> nếu đủ thì start service
     private val reqPerms = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) {
         if (hasAllRequired()) startSvc()
-        else Toast.makeText(this, "Cần cấp đủ Bluetooth/Location/Notifications", Toast.LENGTH_LONG).show()
+        else toast("Cần cấp đủ Bluetooth/Location/Notifications")
     }
 
+    // nhận danh sách thiết bị sau khi scan một lần
     private val scanReceiver = object: BroadcastReceiver() {
         override fun onReceive(c: Context?, i: Intent?) {
             if (i?.action != "blem3.ACTION_SCAN_RESULT") return
             val names = i.getStringArrayListExtra("names") ?: arrayListOf()
             val addrs = i.getStringArrayListExtra("addrs") ?: arrayListOf()
             if (names.isEmpty()) {
-                Toast.makeText(this@MainActivity, "Không thấy thiết bị. Bấm 1 nút trên remote rồi thử lại.", Toast.LENGTH_LONG).show()
+                toast("Không thấy thiết bị. Hãy bấm 1 nút trên remote rồi thử lại.")
                 return
             }
             AlertDialog.Builder(this@MainActivity)
                 .setTitle("Chọn thiết bị")
                 .setItems(names.toTypedArray()) { _, which ->
-                    val addr = addrs[which]
-                    applicationContext.savedAddr = addr
+                    applicationContext.savedAddr = addrs[which]
                     applicationContext.savedName = names[which]
-                    Toast.makeText(this@MainActivity, "Đã lưu: ${names[which]}", Toast.LENGTH_SHORT).show()
+                    toast("Đã lưu: ${names[which]}")
                     startSvc()
+                    showSaved()
                 }.show()
         }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_main)
 
-        registerReceiver(scanReceiver, IntentFilter("blem3.ACTION_SCAN_RESULT"))
+        // ===== UI thuần code (không dùng XML) =====
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(Color.WHITE)           // nền trắng -> không thể “đen”
+            setPadding((24 * resources.displayMetrics.density).toInt())
+        }
 
-        findViewById<Button>(R.id.startBtn).setOnClickListener {
+        tvInfo = TextView(this).apply {
+            textSize = 16f
+            setTextColor(Color.BLACK)
+            text = "BLE-M3 Interceptor\nNhấn START để quét/kết nối. Không pair remote trong Settings."
+        }
+        btnStart = Button(this).apply { text = "START SERVICE" }
+        btnStop  = Button(this).apply { text = "STOP" }
+        btnPick  = Button(this).apply { text = "CHỌN THIẾT BỊ" }
+        btnMap   = Button(this).apply { text = "GÁN PHÍM (Key Mapping)" }
+
+        fun addGap(v: View) {
+            val p = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = (8 * resources.displayMetrics.density).toInt() }
+            root.addView(v, p)
+        }
+
+        addGap(tvInfo)
+        addGap(btnStart); addGap(btnStop); addGap(btnPick); addGap(btnMap)
+        setContentView(root)
+
+        // ===== Hành vi nút =====
+        btnStart.setOnClickListener {
             if (hasAllRequired()) startSvc() else requestAllPerms()
         }
-        findViewById<Button>(R.id.stopBtn).setOnClickListener {
+        btnStop.setOnClickListener {
             stopService(Intent(this, BleM3Service::class.java))
+            toast("Đã dừng service")
         }
-        findViewById<Button>(R.id.pickBtn).setOnClickListener {
+        btnPick.setOnClickListener {
             if (!hasAllRequired()) { requestAllPerms(); return@setOnClickListener }
             sendBroadcast(Intent("blem3.ACTION_SCAN_ONCE"))
+            toast("Đang quét… bấm 1 nút trên remote")
         }
-        findViewById<Button>(R.id.mapBtn).setOnClickListener {
+        btnMap.setOnClickListener {
             startActivity(Intent(this, KeyMapActivity::class.java))
         }
+
+        // receiver trả kết quả scan
+        registerReceiver(scanReceiver, IntentFilter("blem3.ACTION_SCAN_RESULT"))
+
+        // hiển thị MAC đã lưu (nếu có)
+        showSaved()
     }
 
     override fun onDestroy() {
@@ -71,12 +114,23 @@ class MainActivity : AppCompatActivity() {
         super.onDestroy()
     }
 
+    // ===== helpers =====
+    private fun showSaved() {
+        val mac = applicationContext.savedAddr
+        val name = applicationContext.savedName
+        tvInfo.text = buildString {
+            appendLine("BLE-M3 Interceptor")
+            appendLine("Nhấn START để quét/kết nối. Không pair remote trong Settings.")
+            if (!mac.isNullOrBlank()) appendLine("Đã lưu: ${name ?: "(no name)"} [$mac]")
+        }
+    }
+
     private fun startSvc() {
         try {
             startForegroundService(Intent(this, BleM3Service::class.java))
-            Toast.makeText(this, "Đang kết nối…", Toast.LENGTH_SHORT).show()
+            toast("Đang kết nối…")
         } catch (e: Exception) {
-            Toast.makeText(this, "Lỗi khởi động service: ${e.message}", Toast.LENGTH_LONG).show()
+            toast("Lỗi khởi động service: ${e.message}")
         }
     }
 
@@ -99,4 +153,7 @@ class MainActivity : AppCompatActivity() {
         }
         reqPerms.launch(need.toTypedArray())
     }
+
+    private fun toast(msg: String) =
+        Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
 }
