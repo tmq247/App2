@@ -1,177 +1,158 @@
 package dev.yourapp.blem3
 
 import android.Manifest
-import android.app.Activity
-import android.app.AlertDialog
-import android.content.*
+import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothManager
+import android.bluetooth.le.ScanCallback
+import android.bluetooth.le.ScanResult
+import android.bluetooth.le.ScanSettings
+import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
-import android.graphics.Color
 import android.os.Build
 import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
-import android.view.Gravity
+import android.view.LayoutInflater
 import android.view.View
+import android.view.ViewGroup
 import android.widget.*
-import dev.yourapp.blem3.Prefs.savedAddr
-import dev.yourapp.blem3.Prefs.savedName
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
+import androidx.appcompat.app.AppCompatActivity
+import androidx.core.app.ActivityCompat
+import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
 
-class MainActivity : Activity() {
+class MainActivity : AppCompatActivity() {
 
-    companion object {
-        private const val REQ_PERMS = 1001
+    private lateinit var rv: RecyclerView
+    private lateinit var txtStatus: TextView
+    private lateinit var chkAuto: CheckBox
+    private val adapter = DevAdapter { addr, name -> onPick(addr, name) }
+
+    private val btAdapter by lazy {
+        (getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
     }
+    private val scanner get() = btAdapter.bluetoothLeScanner
 
-    private lateinit var tvInfo: TextView
-    private lateinit var btnStart: Button
-    private lateinit var btnStop: Button
-    private lateinit var btnPick: Button
-    private lateinit var btnMap: Button
-
-    /** Receiver trả kết quả scan một lần (từ Service) */
-    private val scanReceiver = object : BroadcastReceiver() {
-        override fun onReceive(c: Context?, i: Intent?) {
-            if (i?.action != "blem3.ACTION_SCAN_RESULT") return
-            val names = i.getStringArrayListExtra("names") ?: arrayListOf()
-            val addrs = i.getStringArrayListExtra("addrs") ?: arrayListOf()
-            if (names.isEmpty()) {
-                toast("Không thấy thiết bị. Hãy bấm 1 nút trên remote rồi thử lại.")
-                return
-            }
-            AlertDialog.Builder(this@MainActivity)
-                .setTitle("Chọn thiết bị")
-                .setItems(names.toTypedArray()) { _, which ->
-                    applicationContext.savedAddr = addrs[which]
-                    applicationContext.savedName = names[which]
-                    toast("Đã lưu: ${names[which]}")
-                    startSvc()
-                    showSaved()
-                }.show()
-        }
+    private val reqPerms = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { _: Map<String, Boolean> ->
+        // Sau khi xin quyền xong → không làm gì, user bấm Quét lại
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        setContentView(R.layout.activity_main)
 
-        // ===== UI thuần code, kết thúc splash ngay lập tức =====
-        val dp = resources.displayMetrics.density
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.WHITE)
-            setPadding((20 * dp).toInt(), (24 * dp).toInt(), (20 * dp).toInt(), (24 * dp).toInt())
-        }
+        rv = findViewById(R.id.rvDevices)
+        txtStatus = findViewById(R.id.txtStatus)
+        chkAuto = findViewById(R.id.chkAutostart)
+        val btnScan: Button = findViewById(R.id.btnScan)
+        val btnMap: Button = findViewById(R.id.btnMap)
 
-        tvInfo = TextView(this).apply {
-            textSize = 16f
-            setTextColor(Color.BLACK)
-            text = "BLE-M3 Interceptor\nNhấn START để quét/kết nối. Không pair remote trong Settings."
-        }
+        rv.layoutManager = LinearLayoutManager(this)
+        rv.adapter = adapter
 
-        fun makeBtn(label: String) = Button(this).apply {
-            text = label
-            isAllCaps = false
-            gravity = Gravity.CENTER
-        }
+        chkAuto.isChecked = Prefs.autoStart(this)
+        chkAuto.setOnCheckedChangeListener { _, b -> Prefs.setAutoStart(this, b) }
 
-        btnStart = makeBtn("START SERVICE")
-        btnStop  = makeBtn("STOP")
-        btnPick  = makeBtn("CHỌN THIẾT BỊ")
-        btnMap   = makeBtn("GÁN PHÍM (Key Mapping)")
+        val sa = Prefs.savedAddr(this)
+        val sn = Prefs.savedName(this)
+        txtStatus.text = if (sa != null) "Thiết bị đã lưu: $sn ($sa)" else "Chưa lưu thiết bị"
 
-        fun add(v: View) {
-            val lp = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { topMargin = (10 * dp).toInt() }
-            root.addView(v, lp)
-        }
-        add(tvInfo); add(btnStart); add(btnStop); add(btnPick); add(btnMap)
-        setContentView(root)
+        btnScan.setOnClickListener { tryScan() }
+        btnMap.setOnClickListener { showKeyMapDialog() }
 
-        // ==== Sự kiện nút ====
-        btnStart.setOnClickListener {
-            if (hasAllRequired()) startSvc() else requestAllPerms()
-        }
-        btnStop.setOnClickListener {
-            stopService(Intent(this, BleM3Service::class.java))
-            toast("Đã dừng service")
-        }
-        btnPick.setOnClickListener {
-            if (!hasAllPermsOrAsk()) return@setOnClickListener
-            sendBroadcast(Intent("blem3.ACTION_SCAN_ONCE"))
-            toast("Đang quét… bấm 1 nút trên remote")
-        }
-        btnMap.setOnClickListener {
-            startActivity(Intent(this, KeyMapActivity::class.java))
-        }
-
-        // Receiver nhận kết quả scan
-        registerReceiver(scanReceiver, IntentFilter("blem3.ACTION_SCAN_RESULT"))
-
-        Handler(Looper.getMainLooper()).post { showSaved() }
+        // Nếu đã lưu thiết bị → chạy service để autoconnect
+        startService(Intent(this, BleM3Service::class.java).apply {
+            action = BleM3Service.ACTION_CONNECT
+        })
     }
 
-    override fun onDestroy() {
-        unregisterReceiver(scanReceiver)
-        super.onDestroy()
-    }
-
-    // ===== Helpers =====
-    private fun showSaved() {
-        val mac = applicationContext.savedAddr
-        val name = applicationContext.savedName
-        tvInfo.text = buildString {
-            appendLine("BLE-M3 Interceptor")
-            appendLine("Nhấn START để quét/kết nối. Không pair remote trong Settings.")
-            if (!mac.isNullOrBlank()) appendLine("Đã lưu: ${name ?: "(no name)"} [$mac]")
+    private fun tryScan() {
+        if (!btAdapter.isEnabled) {
+            startActivity(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE))
+            return
         }
-    }
-
-    private fun startSvc() {
-        try {
-            startForegroundService(Intent(this, BleM3Service::class.java))
-            toast("Đang kết nối…")
-        } catch (e: Exception) {
-            toast("Lỗi khởi động service: ${e.message}")
+        // xin quyền
+        val perms = mutableListOf<String>()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            perms += Manifest.permission.BLUETOOTH_SCAN
+            perms += Manifest.permission.BLUETOOTH_CONNECT
+        } else {
+            perms += Manifest.permission.ACCESS_FINE_LOCATION
+            perms += Manifest.permission.ACCESS_COARSE_LOCATION
         }
-    }
-
-    private fun permissionsNeeded(): Array<String> {
-        val list = mutableListOf(Manifest.permission.ACCESS_FINE_LOCATION)
-        if (Build.VERSION.SDK_INT >= 31) {
-            list += Manifest.permission.BLUETOOTH_SCAN
-            list += Manifest.permission.BLUETOOTH_CONNECT
-            list += Manifest.permission.POST_NOTIFICATIONS
+        val missing = perms.filter {
+            ActivityCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
         }
-        return list.toTypedArray()
+        if (missing.isNotEmpty()) {
+            reqPerms.launch(missing.toTypedArray())
+            return
+        }
+
+        adapter.clear()
+        val set = ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build()
+        scanner.startScan(null, set, scanCb)
+        txtStatus.text = "Đang quét…"
     }
 
-    private fun hasAllRequired(): Boolean =
-        permissionsNeeded().all { checkSelfPermission(it) == PackageManager.PERMISSION_GRANTED }
-
-    private fun requestAllPerms() = requestPermissions(permissionsNeeded(), REQ_PERMS)
-
-    private fun hasAllPermsOrAsk(): Boolean {
-        if (hasAllRequired()) return true
-        requestAllPerms()
-        return false
-    }
-
-    override fun onRequestPermissionsResult(
-        requestCode: Int,
-        permissions: Array<out String>,
-        grantResults: IntArray
-    ) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == REQ_PERMS) {
-            if (grantResults.isNotEmpty() && grantResults.all { it == PackageManager.PERMISSION_GRANTED }) {
-                startSvc()
-            } else {
-                toast("Cần cấp đủ Bluetooth/Location/Notifications")
+    private val scanCb = object : ScanCallback() {
+        override fun onScanResult(callbackType: Int, result: ScanResult) {
+            val d = result.device
+            // Gộp trùng địa chỉ
+            if (!adapter.contains(d.address)) {
+                adapter.add(d.name ?: "(Không tên)", d.address)
             }
         }
     }
 
-    private fun toast(msg: String) =
-        Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
+    private fun onPick(addr: String, name: String) {
+        scanner.stopScan(scanCb)
+        Prefs.saveDevice(this, addr, name)
+        txtStatus.text = "Đã chọn $name ($addr) – đang kết nối…"
+        startService(Intent(this, BleM3Service::class.java).apply {
+            action = BleM3Service.ACTION_CONNECT
+            putExtra(BleM3Service.EXTRA_ADDR, addr)
+        })
+    }
+
+    private fun showKeyMapDialog() {
+        AlertDialog.Builder(this)
+            .setTitle("Map phím thủ công")
+            .setMessage(
+                "Tính năng sẽ cho phép bạn gán report-code HID → phím media.\n" +
+                        "Phiên bản demo chưa đọc HID, nhưng UI đã sẵn sàng."
+            )
+            .setPositiveButton("OK", null)
+            .show()
+    }
+
+    // --- Adapter nhỏ gọn cho danh sách thiết bị ---
+    class DevAdapter(private val onPick: (String, String) -> Unit) :
+        RecyclerView.Adapter<DevVH>() {
+        private val data = mutableListOf<Pair<String, String>>() // name, addr
+        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): DevVH {
+            val v = LayoutInflater.from(parent.context)
+                .inflate(R.layout.item_device, parent, false)
+            return DevVH(v, onPick)
+        }
+        override fun onBindViewHolder(holder: DevVH, position: Int) =
+            holder.bind(data[position])
+        override fun getItemCount(): Int = data.size
+        fun add(name: String, addr: String) { data += name to addr; notifyItemInserted(data.lastIndex) }
+        fun clear() { data.clear(); notifyDataSetChanged() }
+        fun contains(addr: String) = data.any { it.second == addr }
+    }
+
+    class DevVH(v: View, private val onPick: (String, String) -> Unit) :
+        RecyclerView.ViewHolder(v) {
+        private val tName: TextView = v.findViewById(R.id.txtName)
+        private val tAddr: TextView = v.findViewById(R.id.txtAddr)
+        fun bind(p: Pair<String, String>) {
+            tName.text = p.first
+            tAddr.text = p.second
+            itemView.setOnClickListener { onPick(p.second, p.first) }
+        }
+    }
 }
