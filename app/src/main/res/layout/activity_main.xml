@@ -24,4 +24,10 @@
         android:layout_height="wrap_content"
         android:text="STOP"
         android:layout_marginTop="8dp" />
+    <Button
+        android:id="@+id/pickBtn"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="CHỌN THIẾT BỊ"
+        android:layout_marginTop="8dp"/>
 </LinearLayout>
