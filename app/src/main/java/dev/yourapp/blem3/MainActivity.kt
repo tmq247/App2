@@ -37,7 +37,7 @@ class MainActivity : AppCompatActivity() {
     private val reqPerms = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { _: Map<String, Boolean> ->
-        // Sau khi xin quyền xong → không làm gì, user bấm Quét lại
+        // Sau khi xin quyền xong → user bấm Quét lại
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -61,7 +61,7 @@ class MainActivity : AppCompatActivity() {
         txtStatus.text = if (sa != null) "Thiết bị đã lưu: $sn ($sa)" else "Chưa lưu thiết bị"
 
         btnScan.setOnClickListener { tryScan() }
-        btnMap.setOnClickListener { showKeyMapDialog() }
+        btnMap.setOnClickListener { startActivity(Intent(this, KeyMapActivity::class.java)) }
 
         // Nếu đã lưu thiết bị → chạy service để autoconnect
         startService(Intent(this, BleM3Service::class.java).apply {
@@ -100,7 +100,6 @@ class MainActivity : AppCompatActivity() {
     private val scanCb = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult) {
             val d = result.device
-            // Gộp trùng địa chỉ
             if (!adapter.contains(d.address)) {
                 adapter.add(d.name ?: "(Không tên)", d.address)
             }
@@ -115,17 +114,6 @@ class MainActivity : AppCompatActivity() {
             action = BleM3Service.ACTION_CONNECT
             putExtra(BleM3Service.EXTRA_ADDR, addr)
         })
-    }
-
-    private fun showKeyMapDialog() {
-        AlertDialog.Builder(this)
-            .setTitle("Map phím thủ công")
-            .setMessage(
-                "Tính năng sẽ cho phép bạn gán report-code HID → phím media.\n" +
-                        "Phiên bản demo chưa đọc HID, nhưng UI đã sẵn sàng."
-            )
-            .setPositiveButton("OK", null)
-            .show()
     }
 
     // --- Adapter nhỏ gọn cho danh sách thiết bị ---
