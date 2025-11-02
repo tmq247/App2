@@ -4,19 +4,13 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
-import android.bluetooth.BluetoothAdapter
-import android.bluetooth.BluetoothDevice
-import android.bluetooth.BluetoothGatt
-import android.bluetooth.BluetoothManager
-import android.bluetooth.le.BluetoothLeScanner
-import android.bluetooth.le.ScanCallback
-import android.bluetooth.le.ScanFilter
-import android.bluetooth.le.ScanResult
-import android.bluetooth.le.ScanSettings
+import android.bluetooth.*
+import android.bluetooth.le.*
 import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.IBinder
+import android.os.ParcelUuid
 import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.*
 import no.nordicsemi.android.ble.BleManager
@@ -30,35 +24,52 @@ class BleM3Service : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        startForeground(1, notif("Đang khởi động dịch vụ BLE-M3"))
         media = MediaOut(this)
         mgr = M3Manager(this)
 
-        startForeground(1, notif("Đang chờ kết nối BLE-M3"))
+        // Nhận yêu cầu scan 1 lần từ Activity -> gửi danh sách về
+        registerReceiver(object: android.content.BroadcastReceiver() {
+            override fun onReceive(c: Context?, i: Intent?) {
+                if (i?.action == "blem3.ACTION_SCAN_ONCE") scanOnceAndReply()
+            }
+        }, android.content.IntentFilter("blem3.ACTION_SCAN_ONCE"))
 
-        // Theo dõi trạng thái kết nối BLE
         mgr.setConnectionObserver(object : ConnectionObserver {
             override fun onDeviceConnected(device: BluetoothDevice) {
-                notify("Đã kết nối BLE-M3")
+                notify("Đã kết nối: ${device.name ?: device.address}")
             }
-
             override fun onDeviceDisconnected(device: BluetoothDevice, reason: Int) {
                 notify("Mất kết nối • đang quét lại…")
-                startScanForName("BLE-M3") { dev ->
-                    mgr.connect(dev).retry(3, 1000).useAutoConnect(false).enqueue()
-                    stopScan()
-                }
+                autoConnectOrScan()
             }
-
             override fun onDeviceConnecting(device: BluetoothDevice) {}
             override fun onDeviceDisconnecting(device: BluetoothDevice) {}
-            override fun onDeviceFailedToConnect(device: BluetoothDevice, reason: Int) {}
+            override fun onDeviceFailedToConnect(device: BluetoothDevice, reason: Int) {
+                notify("Kết nối thất bại ($reason) • đang quét lại…")
+                autoConnectOrScan()
+            }
             override fun onDeviceReady(device: BluetoothDevice) {}
         })
 
-        // Bắt đầu quét
-        startScanForName("BLE-M3") { device ->
-            mgr.connect(device).retry(3, 1000).useAutoConnect(false).enqueue()
-            stopScan()
+        // Tự kết nối MAC đã lưu nếu có
+        autoConnectOrScan()
+    }
+
+    private fun autoConnectOrScan() {
+        val saved = applicationContext.savedAddr
+        if (saved != null) {
+            val dev = (getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager)
+                .adapter.getRemoteDevice(saved)
+            notify("Đang kết nối $saved…")
+            mgr.connect(dev).retry(3,1000).useAutoConnect(true).enqueue()
+        } else {
+            startScanForHid { device ->
+                applicationContext.savedAddr = device.address
+                applicationContext.savedName = device.name
+                mgr.connect(device).retry(3,1000).useAutoConnect(false).enqueue()
+                stopScan()
+            }
         }
     }
 
@@ -82,24 +93,33 @@ class BleM3Service : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
-    // ====== Quét BLE ======
-    private fun startScanForName(targetName: String, onFound: (BluetoothDevice) -> Unit) {
-        val adapter = (getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
+    // ====== Scan theo HID UUID + fallback tên ======
+    private fun startScanForHid(onFound: (BluetoothDevice) -> Unit) {
+        val btMgr = getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
+        val adapter = btMgr.adapter ?: return
         val scanner: BluetoothLeScanner = adapter.bluetoothLeScanner ?: return
+
+        val HID_UUID = ParcelUuid(UUID.fromString("00001812-0000-1000-8000-00805f9b34fb"))
 
         val settings = ScanSettings.Builder()
             .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
             .build()
 
         val filters = listOf(
-            ScanFilter.Builder().setDeviceName(targetName).build()
+            ScanFilter.Builder().setServiceUuid(HID_UUID).build(),
+            ScanFilter.Builder().setDeviceName("BLE-M3").build(),
+            ScanFilter.Builder().setDeviceName("BLE M3").build()
         )
+
+        notify("Đang quét thiết bị HID… (hãy bấm 1 nút trên remote)")
 
         val cb = object : ScanCallback() {
             override fun onScanResult(callbackType: Int, result: ScanResult) {
                 val dev = result.device ?: return
-                val name = dev.name ?: return
-                if (name == targetName) {
+                val name = dev.name ?: ""
+                val hasHid = result.scanRecord?.serviceUuids?.any { it.uuid == HID_UUID.uuid } == true
+                if (hasHid || name.startsWith("BLE-M3", true) || name.startsWith("BLE M3", true)) {
+                    notify("Tìm thấy ${name.ifBlank { dev.address }} • đang kết nối…")
                     onFound(dev)
                 }
             }
@@ -107,10 +127,10 @@ class BleM3Service : Service() {
 
         scanner.startScan(filters, settings, cb)
 
-        // stop sau 20 giây nếu chưa thấy
         scanJob?.cancel()
         scanJob = CoroutineScope(Dispatchers.Main).launch {
-            delay(20_000)
+            delay(60_000)
+            notify("Không thấy remote • bấm 1 nút trên remote rồi nhấn START lại")
             scanner.stopScan(cb)
         }
     }
@@ -120,9 +140,48 @@ class BleM3Service : Service() {
         scanJob = null
     }
 
-    // ====== BLE Manager ======
+    // Scan 1 lần để trả danh sách cho Activity chọn
+    private fun scanOnceAndReply() {
+        val btMgr = getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
+        val scanner = btMgr.adapter.bluetoothLeScanner ?: return
+        val HID_UUID = ParcelUuid(UUID.fromString("00001812-0000-1000-8000-00805f9b34fb"))
+
+        val names = arrayListOf<String>()
+        val addrs = arrayListOf<String>()
+        val seen = hashSetOf<String>()
+
+        val cb = object : ScanCallback() {
+            override fun onScanResult(callbackType: Int, result: ScanResult) {
+                val dev = result.device ?: return
+                val addr = dev.address ?: return
+                if (!seen.add(addr)) return
+                val hasHid = result.scanRecord?.serviceUuids?.any { it.uuid == HID_UUID.uuid } == true
+                val name = dev.name?.takeIf { it.isNotBlank() } ?: if (hasHid) "HID $addr" else addr
+                names += name; addrs += addr
+            }
+        }
+
+        val settings = ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build()
+        val filters = listOf(
+            ScanFilter.Builder().setServiceUuid(HID_UUID).build(),
+            ScanFilter.Builder().setDeviceName("BLE-M3").build(),
+            ScanFilter.Builder().setDeviceName("BLE M3").build()
+        )
+        scanner.startScan(filters, settings, cb)
+
+        CoroutineScope(Dispatchers.Main).launch {
+            delay(5_000)
+            scanner.stopScan(cb)
+            val i = Intent("blem3.ACTION_SCAN_RESULT")
+                .putStringArrayListExtra("names", names)
+                .putStringArrayListExtra("addrs", addrs)
+            sendBroadcast(i)
+        }
+    }
+
+    // ====== BleManager ======
     inner class M3Manager(ctx: Context) : BleManager(ctx) {
-        private var reportChar: android.bluetooth.BluetoothGattCharacteristic? = null
+        private var reportChar: BluetoothGattCharacteristic? = null
 
         override fun isRequiredServiceSupported(gatt: BluetoothGatt): Boolean {
             val hid = gatt.getService(UUID.fromString("00001812-0000-1000-8000-00805f9b34fb")) ?: return false
@@ -131,24 +190,42 @@ class BleM3Service : Service() {
         }
 
         override fun initialize() {
-            setNotificationCallback(reportChar).with { _, data ->
-                handleReport(data.value)
-            }
+            setNotificationCallback(reportChar).with { _, data -> handleReport(data.value) }
             enableNotifications(reportChar).enqueue()
+            notify("Đã kết nối • đang nghe phím…")
         }
 
-        override fun onServicesInvalidated() {
-            reportChar = null
-        }
+        override fun onServicesInvalidated() { reportChar = null }
     }
 
-    // ====== Giải mã dữ liệu HID ======
+    // Gửi raw usage cho màn key-map
+    private fun sendRawUsage(u: Int) {
+        val i = Intent("blem3.ACTION_KEY_RAW").putExtra("usage", u)
+        sendBroadcast(i)
+    }
+
+    // ====== Giải mã + Map phím ======
     private fun handleReport(bytes: ByteArray?) {
         if (bytes == null || bytes.isEmpty()) return
+        val userMap = Prefs.loadMap(this)
 
-        // Ưu tiên mã usage của Media
+        // Ưu tiên: kiểm tra từng byte như usage code
         for (b in bytes) {
-            when (b.toInt() and 0xFF) {
+            val u = b.toInt() and 0xFF
+            sendRawUsage(u) // để KeyMapActivity bắt mã
+
+            // Map theo người dùng
+            when (Action.fromLabel(userMap[u] ?: "")) {
+                Action.PLAY_PAUSE -> { media.playPause(); return }
+                Action.NEXT       -> { media.next(); return }
+                Action.PREV       -> { media.prev(); return }
+                Action.VOL_UP     -> { media.volUp(); return }
+                Action.VOL_DOWN   -> { media.volDown(); return }
+                else -> { /* không map -> thử mặc định */ }
+            }
+
+            // Mặc định theo chuẩn Consumer Control
+            when (u) {
                 0x80 -> { media.volUp(); return }     // Volume Up
                 0x81 -> { media.volDown(); return }   // Volume Down
                 0xB5 -> { media.next(); return }      // Next Track
@@ -157,12 +234,9 @@ class BleM3Service : Service() {
             }
         }
 
-        // Nếu là chuột: click trái → Play/Pause
+        // Fallback kiểu chuột: btn bit0 = left click -> Play/Pause
         val btn = bytes[0].toInt() and 0xFF
-        if ((btn and 0x01) != 0) {
-            media.playPause()
-            return
-        }
+        if ((btn and 0x01) != 0) { media.playPause(); return }
 
         // Dịch chuyển ngang → next/prev
         val dx = bytes.getOrNull(1)?.toInt() ?: 0
