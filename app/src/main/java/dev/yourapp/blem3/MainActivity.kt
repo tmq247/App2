@@ -2,6 +2,7 @@ package dev.yourapp.blem3
 
 import android.Manifest
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.*
 import android.content.pm.PackageManager
 import android.graphics.Color
@@ -12,11 +13,14 @@ import android.os.Looper
 import android.view.Gravity
 import android.view.View
 import android.widget.*
-import androidx.activity.result.contract.ActivityResultContracts
 import dev.yourapp.blem3.Prefs.savedAddr
 import dev.yourapp.blem3.Prefs.savedName
 
 class MainActivity : Activity() {
+
+    companion object {
+        private const val REQ_PERMS = 1001
+    }
 
     private lateinit var tvInfo: TextView
     private lateinit var btnStart: Button
@@ -24,16 +28,8 @@ class MainActivity : Activity() {
     private lateinit var btnPick: Button
     private lateinit var btnMap: Button
 
-    /** Xin quyền → nếu đủ thì start service */
-    private val reqPerms = registerForActivityResult(
-        ActivityResultContracts.RequestMultiplePermissions()
-    ) { _ ->
-        if (hasAllRequired()) startSvc()
-        else toast("Cần cấp đủ Bluetooth/Location/Notifications")
-    }
-
-    /** Nhận danh sách thiết bị sau khi scan một lần */
-    private val scanReceiver = object: BroadcastReceiver() {
+    /** Receiver trả kết quả scan một lần (từ Service) */
+    private val scanReceiver = object : BroadcastReceiver() {
         override fun onReceive(c: Context?, i: Intent?) {
             if (i?.action != "blem3.ACTION_SCAN_RESULT") return
             val names = i.getStringArrayListExtra("names") ?: arrayListOf()
@@ -57,11 +53,11 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // ---- UI thuần code để chắc chắn vẽ frame đầu tiên ngay lập tức ----
+        // ===== UI thuần code, kết thúc splash ngay lập tức =====
         val dp = resources.displayMetrics.density
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.WHITE)       // nền trắng -> không còn "đen"
+            setBackgroundColor(Color.WHITE)
             setPadding((20 * dp).toInt(), (24 * dp).toInt(), (20 * dp).toInt(), (24 * dp).toInt())
         }
 
@@ -70,6 +66,7 @@ class MainActivity : Activity() {
             setTextColor(Color.BLACK)
             text = "BLE-M3 Interceptor\nNhấn START để quét/kết nối. Không pair remote trong Settings."
         }
+
         fun makeBtn(label: String) = Button(this).apply {
             text = label
             isAllCaps = false
@@ -89,11 +86,9 @@ class MainActivity : Activity() {
             root.addView(v, lp)
         }
         add(tvInfo); add(btnStart); add(btnStop); add(btnPick); add(btnMap)
-
-        // Đặt content ngay (kết thúc splash ngay lập tức)
         setContentView(root)
 
-        // Binding sự kiện (đặt sau setContentView cho chắc)
+        // ==== Sự kiện nút ====
         btnStart.setOnClickListener {
             if (hasAllRequired()) startSvc() else requestAllPerms()
         }
@@ -102,7 +97,7 @@ class MainActivity : Activity() {
             toast("Đã dừng service")
         }
         btnPick.setOnClickListener {
-            if (!hasAllRequired()) { requestAllPerms(); return@setOnClickListener }
+            if (!hasAllPermsOrAsk()) return@setOnClickListener
             sendBroadcast(Intent("blem3.ACTION_SCAN_ONCE"))
             toast("Đang quét… bấm 1 nút trên remote")
         }
@@ -110,10 +105,9 @@ class MainActivity : Activity() {
             startActivity(Intent(this, KeyMapActivity::class.java))
         }
 
-        // Đăng ký receiver
+        // Receiver nhận kết quả scan
         registerReceiver(scanReceiver, IntentFilter("blem3.ACTION_SCAN_RESULT"))
 
-        // Cập nhật thông tin MAC đã lưu (nếu có) một nhịp ngắn sau khi hiển thị
         Handler(Looper.getMainLooper()).post { showSaved() }
     }
 
@@ -122,7 +116,7 @@ class MainActivity : Activity() {
         super.onDestroy()
     }
 
-    // -------- Helpers ----------
+    // ===== Helpers =====
     private fun showSaved() {
         val mac = applicationContext.savedAddr
         val name = applicationContext.savedName
@@ -133,32 +127,48 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun hasAllRequired(): Boolean {
-        val need = mutableListOf(Manifest.permission.ACCESS_FINE_LOCATION)
-        if (Build.VERSION.SDK_INT >= 31) {
-            need += Manifest.permission.BLUETOOTH_SCAN
-            need += Manifest.permission.BLUETOOTH_CONNECT
-            need += Manifest.permission.POST_NOTIFICATIONS
-        }
-        return need.all { checkSelfPermission(it) == PackageManager.PERMISSION_GRANTED }
-    }
-
-    private fun requestAllPerms() {
-        val need = mutableListOf(Manifest.permission.ACCESS_FINE_LOCATION)
-        if (Build.VERSION.SDK_INT >= 31) {
-            need += Manifest.permission.BLUETOOTH_SCAN
-            need += Manifest.permission.BLUETOOTH_CONNECT
-            need += Manifest.permission.POST_NOTIFICATIONS
-        }
-        reqPerms.launch(need.toTypedArray())
-    }
-
     private fun startSvc() {
         try {
             startForegroundService(Intent(this, BleM3Service::class.java))
             toast("Đang kết nối…")
         } catch (e: Exception) {
             toast("Lỗi khởi động service: ${e.message}")
+        }
+    }
+
+    private fun permissionsNeeded(): Array<String> {
+        val list = mutableListOf(Manifest.permission.ACCESS_FINE_LOCATION)
+        if (Build.VERSION.SDK_INT >= 31) {
+            list += Manifest.permission.BLUETOOTH_SCAN
+            list += Manifest.permission.BLUETOOTH_CONNECT
+            list += Manifest.permission.POST_NOTIFICATIONS
+        }
+        return list.toTypedArray()
+    }
+
+    private fun hasAllRequired(): Boolean =
+        permissionsNeeded().all { checkSelfPermission(it) == PackageManager.PERMISSION_GRANTED }
+
+    private fun requestAllPerms() = requestPermissions(permissionsNeeded(), REQ_PERMS)
+
+    private fun hasAllPermsOrAsk(): Boolean {
+        if (hasAllRequired()) return true
+        requestAllPerms()
+        return false
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == REQ_PERMS) {
+            if (grantResults.isNotEmpty() && grantResults.all { it == PackageManager.PERMISSION_GRANTED }) {
+                startSvc()
+            } else {
+                toast("Cần cấp đủ Bluetooth/Location/Notifications")
+            }
         }
     }
 
