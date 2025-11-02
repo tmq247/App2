@@ -29,9 +29,9 @@ android {
   kotlinOptions {
     jvmTarget = '17'
   }
-  kotlin {
+}
+kotlin {
   jvmToolchain(17)
-  }
 }
 
 dependencies {
