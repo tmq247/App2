@@ -1,41 +1,39 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    android:layout_width="match_parent"
-    android:layout_height="match_parent"
     android:orientation="vertical"
-    android:padding="24dp">
+    android:padding="16dp"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
 
     <TextView
-        android:id="@+id/tvInfo"
+        android:id="@+id/txtStatus"
+        android:text="Chưa kết nối"
+        android:textSize="18sp"
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="BLE-M3 Interceptor — Nhấn START để quét/kết nối. Không pair remote trong Settings."
-        android:paddingBottom="12dp" />
+        android:layout_height="wrap_content" />
+
+    <CheckBox
+        android:id="@+id/chkAutostart"
+        android:text="Tự động kết nối khi khởi động máy"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content" />
 
     <Button
-        android:id="@+id/startBtn"
+        android:id="@+id/btnScan"
+        android:text="Quét & chọn thiết bị"
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="START SERVICE" />
+        android:layout_height="wrap_content" />
+
+    <androidx.recyclerview.widget.RecyclerView
+        android:id="@+id/rvDevices"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:paddingTop="8dp" />
 
     <Button
-        android:id="@+id/stopBtn"
+        android:id="@+id/btnMap"
+        android:text="Map phím thủ công"
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="STOP"
-        android:layout_marginTop="8dp" />
-
-    <Button
-        android:id="@+id/pickBtn"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="CHỌN THIẾT BỊ"
-        android:layout_marginTop="8dp" />
-
-    <Button
-        android:id="@+id/mapBtn"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="GÁN PHÍM (Key Mapping)"
-        android:layout_marginTop="8dp" />
+        android:layout_height="wrap_content" />
 </LinearLayout>
