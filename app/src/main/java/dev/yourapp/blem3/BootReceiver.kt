@@ -10,7 +10,7 @@ class BootReceiver : BroadcastReceiver() {
             val i = Intent(context, BleM3Service::class.java).apply {
                 action = BleM3Service.ACTION_CONNECT
             }
-            context.startForegroundService(i)
+            try { context.startForegroundService(i) } catch (_: Throwable) {}
         }
     }
 }
