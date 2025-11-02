@@ -17,25 +17,28 @@ import android.Manifest
 import android.content.pm.PackageManager
 import kotlinx.coroutines.*
 import java.util.*
-import dev.yourapp.blem3.Prefs.savedAddr
-import dev.yourapp.blem3.Prefs.savedName
-import dev.yourapp.blem3.Prefs.loadMap
 
 class BleM3Service : Service() {
-    private lateinit var media: MediaOut
+
+    companion object {
+        const val ACTION_CONNECT = "dev.yourapp.blem3.ACTION_CONNECT"
+        const val ACTION_DISCONNECT = "dev.yourapp.blem3.ACTION_DISCONNECT"
+        const val EXTRA_ADDR = "addr"
+    }
+
     private var scanJob: Job? = null
+    private var gatt: BluetoothGatt? = null
 
     override fun onCreate() {
         super.onCreate()
         startForeground(1, notif("Đang khởi động dịch vụ BLE-M3"))
-        media = MediaOut(this)
 
         if (!hasBtPerms()) {
             notify("Thiếu quyền Bluetooth/Location — mở ứng dụng để cấp quyền")
             return
         }
 
-        // Lắng nghe scan 1 lần để trả danh sách cho MainActivity
+        // Lắng nghe yêu cầu scan 1 lần từ MainActivity
         registerReceiver(object: android.content.BroadcastReceiver() {
             override fun onReceive(c: Context?, i: Intent?) {
                 if (i?.action == "blem3.ACTION_SCAN_ONCE") scanOnceAndReply()
@@ -45,8 +48,23 @@ class BleM3Service : Service() {
         autoConnectOrScan()
     }
 
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        when (intent?.action) {
+            ACTION_CONNECT -> {
+                val addr = intent.getStringExtra(EXTRA_ADDR) ?: Prefs.savedAddr(this)
+                if (addr != null) startScanOrConnect(addr) else autoConnectOrScan()
+            }
+            ACTION_DISCONNECT -> {
+                gatt?.close(); gatt = null
+                stopSelf()
+            }
+        }
+        return START_STICKY
+    }
+
     override fun onBind(intent: Intent?): IBinder? = null
 
+    /** ---- Quyền ---- */
     private fun hasBtPerms(): Boolean {
         fun ok(p: String) = ContextCompat.checkSelfPermission(this, p) == PackageManager.PERMISSION_GRANTED
         return ok(Manifest.permission.BLUETOOTH_CONNECT)
@@ -54,6 +72,7 @@ class BleM3Service : Service() {
                 && ok(Manifest.permission.ACCESS_FINE_LOCATION)
     }
 
+    /** ---- Notification helpers ---- */
     private fun notif(text: String): Notification {
         val chId = "ble_m3"
         if (Build.VERSION.SDK_INT >= 26) {
@@ -63,31 +82,56 @@ class BleM3Service : Service() {
         return NotificationCompat.Builder(this, chId)
             .setContentTitle("BLE-M3 Interceptor")
             .setContentText(text)
-            .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)  // <= sửa ở đây
+            .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth) // dùng icon hệ thống
+            .setOngoing(true)
             .build()
     }
     private fun notify(text: String) {
         getSystemService(NotificationManager::class.java).notify(1, notif(text))
     }
 
+    /** ---- Kết nối theo MAC đã lưu; nếu chưa có thì scan HID ---- */
     private fun autoConnectOrScan() {
         if (!hasBtPerms()) { notify("Thiếu quyền — mở ứng dụng để cấp quyền"); return }
-        val saved = applicationContext.savedAddr()
+        val saved = Prefs.savedAddr(this)
         if (saved != null) {
-            val btMgr = getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
-            val dev = btMgr.adapter.getRemoteDevice(saved)
-            notify("Đang kết nối $saved…")
-            dev.connectGatt(this, false, gattCb, BluetoothDevice.TRANSPORT_LE)
+            startScanOrConnect(saved)
         } else {
             startScanForHid { device ->
                 Prefs.saveDevice(this, device.address, device.name)
-                device.connectGatt(this, false, gattCb, BluetoothDevice.TRANSPORT_LE)
+                connect(device)
                 stopScan()
             }
         }
     }
 
-    // ====== GATT callback (tối giản) ======
+    private fun startScanOrConnect(addr: String) {
+        val btMgr = getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
+        val dev = try { btMgr.adapter.getRemoteDevice(addr) } catch (_: Exception) { null }
+        if (dev != null) {
+            notify("Đang kết nối $addr…")
+            connect(dev)
+        } else {
+            // Không resolve được device → thử scan theo address
+            val scanner = btMgr.adapter.bluetoothLeScanner ?: return
+            val filters = listOf(ScanFilter.Builder().setDeviceAddress(addr).build())
+            val settings = ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build()
+            notify("Đang quét $addr …")
+            scanner.startScan(filters, settings, object: ScanCallback() {
+                override fun onScanResult(callbackType: Int, result: ScanResult) {
+                    scanner.stopScan(this)
+                    Prefs.saveDevice(this@BleM3Service, result.device.address, result.device.name)
+                    connect(result.device)
+                }
+            })
+        }
+    }
+
+    private fun connect(device: BluetoothDevice) {
+        gatt?.close()
+        gatt = device.connectGatt(this, false, gattCb, BluetoothDevice.TRANSPORT_LE)
+    }
+
     private val gattCb = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
             if (newState == BluetoothProfile.STATE_CONNECTED) {
@@ -95,15 +139,17 @@ class BleM3Service : Service() {
                 gatt.discoverServices()
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                 notify("Mất kết nối • đang quét lại…")
+                this@BleM3Service.gatt?.close()
+                this@BleM3Service.gatt = null
                 autoConnectOrScan()
             }
         }
         override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
-            // TODO: enable notify HID report tại đây khi bạn sẵn sàng
+            // TODO: enableNotify vào HID Report tại đây khi bạn sẵn sàng
         }
     }
 
-    // ===== Scan theo HID UUID + fallback tên =====
+    /** ---- Scan HID + fallback theo tên ---- */
     private fun startScanForHid(onFound: (BluetoothDevice) -> Unit) {
         if (!hasBtPerms()) { notify("Thiếu quyền — mở ứng dụng để cấp quyền"); return }
         val btMgr = getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
@@ -146,7 +192,7 @@ class BleM3Service : Service() {
         scanJob = null
     }
 
-    // Scan 1 lần để trả danh sách cho Activity
+    /** ---- Scan 1 lần để trả danh sách cho Activity ---- */
     private fun scanOnceAndReply() {
         if (!hasBtPerms()) { notify("Thiếu quyền — mở ứng dụng để cấp quyền"); return }
         val btMgr = getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
@@ -186,7 +232,7 @@ class BleM3Service : Service() {
         }
     }
 
-    // === bắn mã phím thô (dùng cho KeyMapActivity) – sẽ gọi ở handleReport khi bạn bật notify HID ===
+    /** Phát mã phím thô (gửi cho KeyMapActivity qua broadcast) – sẽ dùng khi bật notify HID */
     private fun sendRawUsage(u: Int) {
         val i = Intent("blem3.ACTION_KEY_RAW").putExtra("usage", u)
         sendBroadcast(i)
