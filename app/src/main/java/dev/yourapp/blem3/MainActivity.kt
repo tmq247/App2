@@ -9,39 +9,49 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import android.content.pm.PackageManager
 
+// ... import thêm:
+import android.bluetooth.BluetoothDevice
+import androidx.appcompat.app.AlertDialog
+
 class MainActivity : AppCompatActivity() {
+  private val scanned = mutableListOf<BluetoothDevice>()
 
-    private val launcher = registerForActivityResult(
-        ActivityResultContracts.RequestMultiplePermissions()
-    ) { res ->
-        if (res.values.all { it }) startServiceOk()
-        else Toast.makeText(this, "Cần cấp đủ quyền Bluetooth / Location / Notification", Toast.LENGTH_LONG).show()
+  override fun onCreate(savedInstanceState: Bundle?) {
+    super.onCreate(savedInstanceState)
+    setContentView(R.layout.activity_main)
+
+    findViewById<Button>(R.id.startBtn).setOnClickListener { if (hasAllRequired()) startSvc() else requestAllPerms() }
+    findViewById<Button>(R.id.stopBtn).setOnClickListener { stopService(Intent(this, BleM3Service::class.java)) }
+
+    // nút chọn thiết bị
+    findViewById<Button>(R.id.pickBtn).setOnClickListener {
+      if (!hasAllRequired()) { requestAllPerms(); return@setOnClickListener }
+      // mở dialog hiển thị danh sách thiết bị mới quét được – ta yêu cầu Service scan 5s rồi gửi kết quả về broadcast
+      sendBroadcast(Intent("blem3.ACTION_SCAN_ONCE"))
     }
 
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        startPermissionCheck()
-    }
-
-    private fun startPermissionCheck() {
-        val perms = mutableListOf(
-            Manifest.permission.ACCESS_FINE_LOCATION,
-            Manifest.permission.BLUETOOTH_SCAN,
-            Manifest.permission.BLUETOOTH_CONNECT,
-            Manifest.permission.POST_NOTIFICATIONS
-        )
-        if (perms.all { checkSelfPermission(it) == PackageManager.PERMISSION_GRANTED }) {
-            startServiceOk()
-        } else launcher.launch(perms.toTypedArray())
-    }
-
-    private fun startServiceOk() {
-        try {
-            val i = Intent(this, BleM3Service::class.java)
-            startForegroundService(i)
-            Toast.makeText(this, "Đang chạy dịch vụ BLE-M3", Toast.LENGTH_SHORT).show()
-        } catch (e: Exception) {
-            Toast.makeText(this, "Lỗi khởi động service: ${e.message}", Toast.LENGTH_LONG).show()
+    // nhận danh sách thiết bị từ Service
+    registerReceiver(object : android.content.BroadcastReceiver() {
+      override fun onReceive(c: Context?, i: Intent?) {
+        if (i?.action == "blem3.ACTION_SCAN_RESULT") {
+          val names = i.getStringArrayListExtra("names") ?: arrayListOf()
+          val addrs = i.getStringArrayListExtra("addrs") ?: arrayListOf()
+          scanned.clear()
+          for (k in names.indices) {
+            val d = android.bluetooth.BluetoothAdapter.getDefaultAdapter().getRemoteDevice(addrs[k])
+            scanned += d
+          }
+          AlertDialog.Builder(this@MainActivity)
+            .setTitle("Chọn thiết bị")
+            .setItems(names.toTypedArray()) { _, which ->
+              val dev = scanned[which]
+              applicationContext.savedAddr = dev.address
+              applicationContext.savedName = names[which]
+              Toast.makeText(this@MainActivity, "Đã lưu: ${names[which]}", Toast.LENGTH_SHORT).show()
+              startSvc()
+            }.show()
         }
-    }
+      }
+    }, android.content.IntentFilter("blem3.ACTION_SCAN_RESULT"))
+  }
 }
