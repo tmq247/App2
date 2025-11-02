@@ -1,15 +1,14 @@
 package dev.yourapp.blem3
 
 import android.Manifest
+import android.content.Intent
 import android.os.Build
 import android.os.Bundle
+import android.widget.Button
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
-import dev.yourapp.blem3.databinding.ActivityMainBinding
-import android.content.Intent
 
 class MainActivity : AppCompatActivity() {
-  private lateinit var vb: ActivityMainBinding
 
   private val reqPerms = registerForActivityResult(
     ActivityResultContracts.RequestMultiplePermissions()
@@ -17,13 +16,15 @@ class MainActivity : AppCompatActivity() {
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
-    vb = ActivityMainBinding.inflate(layoutInflater)
-    setContentView(vb.root)
+    setContentView(R.layout.activity_main)
 
-    vb.startBtn.setOnClickListener {
+    val startBtn: Button = findViewById(R.id.startBtn)
+    val stopBtn: Button  = findViewById(R.id.stopBtn)
+
+    startBtn.setOnClickListener {
       startForegroundService(Intent(this, BleM3Service::class.java))
     }
-    vb.stopBtn.setOnClickListener {
+    stopBtn.setOnClickListener {
       stopService(Intent(this, BleM3Service::class.java))
     }
 
