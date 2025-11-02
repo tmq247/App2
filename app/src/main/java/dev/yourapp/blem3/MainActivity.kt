@@ -12,6 +12,8 @@ import androidx.appcompat.app.AppCompatActivity
 import android.content.pm.PackageManager
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
+import dev.yourapp.blem3.Prefs.savedAddr
+import dev.yourapp.blem3.Prefs.savedName
 
 class MainActivity : AppCompatActivity() {
 
