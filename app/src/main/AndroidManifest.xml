@@ -1,42 +1,83 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- Quyền -->
-    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30"/>
-    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30"/>
-    <uses-permission android:name="android.permission.BLUETOOTH_SCAN"/>
-    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT"/>
-    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
-    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE"/>
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"/>
-    <uses-permission android:name="android.permission.WAKE_LOCK"/>
-    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
+    <!-- ========= Quyền cho BLE / foreground service ========= -->
+    <!-- Android 12+ (API 31+) -->
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <!-- Nếu cần quảng bá, có thể thêm BLUETOOTH_ADVERTISE -->
+    <!-- <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" /> -->
+
+    <!-- Android < 12 (tương thích) -->
+    <uses-permission
+        android:name="android.permission.BLUETOOTH"
+        android:maxSdkVersion="30" />
+    <uses-permission
+        android:name="android.permission.BLUETOOTH_ADMIN"
+        android:maxSdkVersion="30" />
+
+    <!-- Vị trí: cần cho scan BLE trên Android < 12 -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+
+    <!-- Thông báo (Android 13+) để foreground service hiển thị notification -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- Foreground service (Android 9+) -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <!-- Android 14 (API 34+) – khai báo loại kết nối thiết bị -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <!-- (tuỳ chọn) Đồng bộ dữ liệu foreground -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+
+    <!-- Tự khởi động sau khi máy reboot -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <!-- (tuỳ chọn) Giữ CPU khi xử lý -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+    <!-- Khai báo thiết bị có BLE; đặt required=false để vẫn cài được trên máy không có BLE -->
+    <uses-feature
+        android:name="android.hardware.bluetooth_le"
+        android:required="false" />
 
     <application
-    android:name=".App"
-    android:label="BLE-M3 Interceptor"
-    android:theme="@android:style/Theme.DeviceDefault.NoActionBar"
-    android:exported="true">
+        android:name=".App"
+        android:allowBackup="false"
+        android:label="BLE-M3 Interceptor"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
 
-        <activity android:name=".KeyMapActivity" android:exported="false" />
-        <activity android:name=".MainActivity" android:exported="true">
+        <!-- Activity thử nghiệm siêu nhẹ để loại trừ lỗi splash/đen -->
+        <activity
+            android:name=".HelloActivity"
+            android:exported="true">
             <intent-filter>
-                <action android:name="android.intent.action.MAIN"/>
-                <category android:name="android.intent.category.LAUNCHER"/>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
 
+        <!-- Activity chính của ứng dụng (không làm LAUNCHER trong bản test) -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true" />
+
+        <!-- Foreground service xử lý BLE HID -->
         <service
             android:name=".BleM3Service"
             android:exported="false"
-            android:foregroundServiceType="connectedDevice|mediaPlayback" />
+            android:foregroundServiceType="connectedDevice|dataSync" />
 
-        <receiver android:name=".BootReceiver" android:exported="false">
+        <!-- Tự khởi động sau reboot -->
+        <receiver
+            android:name=".BootReceiver"
+            android:enabled="true"
+            android:exported="true">
             <intent-filter>
-                <action android:name="android.intent.action.BOOT_COMPLETED"/>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
             </intent-filter>
         </receiver>
+
     </application>
 </manifest>
