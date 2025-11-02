@@ -1,5 +1,7 @@
 package dev.yourapp.blem3
 
+import dev.yourapp.blem3.Prefs.savedAddr
+import dev.yourapp.blem3.Prefs.savedName
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -57,20 +59,20 @@ class BleM3Service : Service() {
     }
 
     private fun autoConnectOrScan() {
-        val saved = applicationContext.savedAddr
-        if (saved != null) {
-            val dev = (getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager)
-                .adapter.getRemoteDevice(saved)
-            notify("Đang kết nối $saved…")
-            mgr.connect(dev).retry(3,1000).useAutoConnect(true).enqueue()
-        } else {
-            startScanForHid { device ->
-                applicationContext.savedAddr = device.address
-                applicationContext.savedName = device.name
-                mgr.connect(device).retry(3,1000).useAutoConnect(false).enqueue()
-                stopScan()
-            }
+    val saved = applicationContext.savedAddr
+    if (saved != null) {
+        val btMgr = getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
+        val dev = btMgr.adapter.getRemoteDevice(saved as String) // ép kiểu String để tránh ambiguity
+        notify("Đang kết nối $saved…")
+        mgr.connect(dev).retry(3,1000).useAutoConnect(true).enqueue()
+    } else {
+        startScanForHid { device ->
+            applicationContext.savedAddr = device.address
+            applicationContext.savedName = device.name
+            mgr.connect(device).retry(3,1000).useAutoConnect(false).enqueue()
+            stopScan()
         }
+    }
     }
 
     private fun notify(text: String) {
