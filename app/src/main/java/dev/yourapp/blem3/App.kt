@@ -7,7 +7,7 @@ class App : Application() {
     override fun onCreate() {
         super.onCreate()
         Thread.setDefaultUncaughtExceptionHandler { t, e ->
-            Log.e("BLE-M3", "CRASH in ${t.name}", e)
+            Log.e("BLE-M3", "FATAL in ${t.name}", e)
         }
     }
 }
