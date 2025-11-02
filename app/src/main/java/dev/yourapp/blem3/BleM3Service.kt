@@ -1,7 +1,5 @@
 package dev.yourapp.blem3
 
-import dev.yourapp.blem3.Prefs.savedAddr
-import dev.yourapp.blem3.Prefs.savedName
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -10,14 +8,20 @@ import android.bluetooth.*
 import android.bluetooth.le.*
 import android.content.Context
 import android.content.Intent
+import android.Manifest
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.IBinder
 import android.os.ParcelUuid
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import kotlinx.coroutines.*
 import no.nordicsemi.android.ble.BleManager
 import no.nordicsemi.android.ble.observer.ConnectionObserver
 import java.util.*
+import dev.yourapp.blem3.Prefs.savedAddr
+import dev.yourapp.blem3.Prefs.savedName
+import dev.yourapp.blem3.Prefs.loadMap
 
 class BleM3Service : Service() {
     private lateinit var media: MediaOut
@@ -30,7 +34,13 @@ class BleM3Service : Service() {
         media = MediaOut(this)
         mgr = M3Manager(this)
 
-        // Nhận yêu cầu scan 1 lần từ Activity -> gửi danh sách về
+        // Nếu chưa đủ quyền thì không gọi BLE, tránh crash
+        if (!hasBtPerms()) {
+            notify("Thiếu quyền Bluetooth/Location — mở ứng dụng để cấp quyền")
+            return
+        }
+
+        // Lắng nghe yêu cầu scan 1 lần từ Activity
         registerReceiver(object: android.content.BroadcastReceiver() {
             override fun onReceive(c: Context?, i: Intent?) {
                 if (i?.action == "blem3.ACTION_SCAN_ONCE") scanOnceAndReply()
@@ -45,41 +55,48 @@ class BleM3Service : Service() {
                 notify("Mất kết nối • đang quét lại…")
                 autoConnectOrScan()
             }
-            override fun onDeviceConnecting(device: BluetoothDevice) {}
-            override fun onDeviceDisconnecting(device: BluetoothDevice) {}
             override fun onDeviceFailedToConnect(device: BluetoothDevice, reason: Int) {
                 notify("Kết nối thất bại ($reason) • đang quét lại…")
                 autoConnectOrScan()
             }
+            override fun onDeviceConnecting(device: BluetoothDevice) {}
+            override fun onDeviceDisconnecting(device: BluetoothDevice) {}
             override fun onDeviceReady(device: BluetoothDevice) {}
         })
 
-        // Tự kết nối MAC đã lưu nếu có
         autoConnectOrScan()
     }
 
+    override fun onBind(intent: Intent?): IBinder? = null
+
+    // ===== Quyền BLE =====
+    private fun hasBtPerms(): Boolean {
+        fun ok(p: String) = ContextCompat.checkSelfPermission(this, p) == PackageManager.PERMISSION_GRANTED
+        return ok(Manifest.permission.BLUETOOTH_CONNECT)
+                && ok(Manifest.permission.BLUETOOTH_SCAN)
+                && ok(Manifest.permission.ACCESS_FINE_LOCATION)
+    }
+
+    // ===== Kết nối theo MAC đã lưu, nếu không thì quét HID =====
     private fun autoConnectOrScan() {
-    val saved = applicationContext.savedAddr
-    if (saved != null) {
-        val btMgr = getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
-        val dev = btMgr.adapter.getRemoteDevice(saved as String) // ép kiểu String để tránh ambiguity
-        notify("Đang kết nối $saved…")
-        mgr.connect(dev).retry(3,1000).useAutoConnect(true).enqueue()
-    } else {
-        startScanForHid { device ->
-            applicationContext.savedAddr = device.address
-            applicationContext.savedName = device.name
-            mgr.connect(device).retry(3,1000).useAutoConnect(false).enqueue()
-            stopScan()
+        if (!hasBtPerms()) { notify("Thiếu quyền — mở ứng dụng để cấp quyền"); return }
+        val saved = applicationContext.savedAddr
+        if (saved != null) {
+            val btMgr = getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
+            val dev = btMgr.adapter.getRemoteDevice(saved)
+            notify("Đang kết nối $saved…")
+            mgr.connect(dev).retry(3,1000).useAutoConnect(true).enqueue()
+        } else {
+            startScanForHid { device ->
+                applicationContext.savedAddr = device.address
+                applicationContext.savedName = device.name
+                mgr.connect(device).retry(3,1000).useAutoConnect(false).enqueue()
+                stopScan()
+            }
         }
     }
-    }
 
-    private fun notify(text: String) {
-        val nm = getSystemService(NotificationManager::class.java)
-        nm.notify(1, notif(text))
-    }
-
+    // ===== Notification helper =====
     private fun notif(text: String): Notification {
         val chId = "ble_m3"
         if (Build.VERSION.SDK_INT >= 26) {
@@ -92,21 +109,19 @@ class BleM3Service : Service() {
             .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
             .build()
     }
+    private fun notify(text: String) {
+        getSystemService(NotificationManager::class.java).notify(1, notif(text))
+    }
 
-    override fun onBind(intent: Intent?): IBinder? = null
-
-    // ====== Scan theo HID UUID + fallback tên ======
+    // ===== Scan theo HID UUID + fallback tên =====
     private fun startScanForHid(onFound: (BluetoothDevice) -> Unit) {
+        if (!hasBtPerms()) { notify("Thiếu quyền — mở ứng dụng để cấp quyền"); return }
         val btMgr = getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
-        val adapter = btMgr.adapter ?: return
-        val scanner: BluetoothLeScanner = adapter.bluetoothLeScanner ?: return
+        val scanner = btMgr.adapter.bluetoothLeScanner ?: return
 
         val HID_UUID = ParcelUuid(UUID.fromString("00001812-0000-1000-8000-00805f9b34fb"))
 
-        val settings = ScanSettings.Builder()
-            .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
-            .build()
-
+        val settings = ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build()
         val filters = listOf(
             ScanFilter.Builder().setServiceUuid(HID_UUID).build(),
             ScanFilter.Builder().setDeviceName("BLE-M3").build(),
@@ -142,8 +157,9 @@ class BleM3Service : Service() {
         scanJob = null
     }
 
-    // Scan 1 lần để trả danh sách cho Activity chọn
+    // ===== Scan 1 lần để trả danh sách cho Activity =====
     private fun scanOnceAndReply() {
+        if (!hasBtPerms()) { notify("Thiếu quyền — mở ứng dụng để cấp quyền"); return }
         val btMgr = getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
         val scanner = btMgr.adapter.bluetoothLeScanner ?: return
         val HID_UUID = ParcelUuid(UUID.fromString("00001812-0000-1000-8000-00805f9b34fb"))
@@ -181,7 +197,7 @@ class BleM3Service : Service() {
         }
     }
 
-    // ====== BleManager ======
+    // ===== BLE Manager: subscribe report =====
     inner class M3Manager(ctx: Context) : BleManager(ctx) {
         private var reportChar: BluetoothGattCharacteristic? = null
 
@@ -200,47 +216,44 @@ class BleM3Service : Service() {
         override fun onServicesInvalidated() { reportChar = null }
     }
 
-    // Gửi raw usage cho màn key-map
+    // ===== Bắn mã phím thô cho màn gán phím =====
     private fun sendRawUsage(u: Int) {
         val i = Intent("blem3.ACTION_KEY_RAW").putExtra("usage", u)
         sendBroadcast(i)
     }
 
-    // ====== Giải mã + Map phím ======
+    // ===== Giải mã + Map phím =====
     private fun handleReport(bytes: ByteArray?) {
         if (bytes == null || bytes.isEmpty()) return
-        val userMap = Prefs.loadMap(this)
+        val userMap = loadMap(this) // Prefs.loadMap
 
-        // Ưu tiên: kiểm tra từng byte như usage code
         for (b in bytes) {
             val u = b.toInt() and 0xFF
-            sendRawUsage(u) // để KeyMapActivity bắt mã
+            sendRawUsage(u)
 
-            // Map theo người dùng
+            // Map theo người dùng trước
             when (Action.fromLabel(userMap[u] ?: "")) {
                 Action.PLAY_PAUSE -> { media.playPause(); return }
                 Action.NEXT       -> { media.next(); return }
                 Action.PREV       -> { media.prev(); return }
                 Action.VOL_UP     -> { media.volUp(); return }
                 Action.VOL_DOWN   -> { media.volDown(); return }
-                else -> { /* không map -> thử mặc định */ }
+                else -> {}
             }
 
-            // Mặc định theo chuẩn Consumer Control
+            // Mặc định theo HID Consumer
             when (u) {
-                0x80 -> { media.volUp(); return }     // Volume Up
-                0x81 -> { media.volDown(); return }   // Volume Down
-                0xB5 -> { media.next(); return }      // Next Track
-                0xB6 -> { media.prev(); return }      // Previous Track
-                0xCD -> { media.playPause(); return } // Play/Pause
+                0x80 -> { media.volUp(); return }
+                0x81 -> { media.volDown(); return }
+                0xB5 -> { media.next(); return }
+                0xB6 -> { media.prev(); return }
+                0xCD -> { media.playPause(); return }
             }
         }
 
-        // Fallback kiểu chuột: btn bit0 = left click -> Play/Pause
+        // Fallback kiểu chuột
         val btn = bytes[0].toInt() and 0xFF
         if ((btn and 0x01) != 0) { media.playPause(); return }
-
-        // Dịch chuyển ngang → next/prev
         val dx = bytes.getOrNull(1)?.toInt() ?: 0
         if (dx > 5) media.next() else if (dx < -5) media.prev()
     }
